@@ -158,10 +158,11 @@ def chart_base(fig: go.Figure, height: int = 380, margin: dict | None = None) ->
     return fig
 
 
-def card(label: str, value: str, color: str = "green", sub: str = "") -> str:
+def card(label: str, value: str, color: str = "green", sub: str = "", dimmed: bool = False) -> str:
     sub_html = f'<div class="m-sub">{sub}</div>' if sub else ""
+    style = "opacity:0.38;" if dimmed else ""
     return f"""
-<div class="m-card">
+<div class="m-card" style="{style}">
   <div class="m-label">{label}</div>
   <div class="m-value {color}">{value}</div>
   {sub_html}
@@ -240,26 +241,27 @@ with tab1:
         mem_per_job  = MEM_RATE  * memory_gib * runtime_sec
         base_per_job = gpu_per_job + cpu_per_job + mem_per_job
 
-        prod_per_job   = base_per_job * combined_mult
-        base_monthly   = base_per_job * jobs_per_month
-        region_monthly = base_per_job * region_mult * jobs_per_month
-        prod_monthly   = prod_per_job * jobs_per_month
-        ratio = prod_monthly / base_monthly if base_monthly > 0 else 1.0
+        # active multiplier: region only, or region × 3 if toggle on
+        prod_per_job       = base_per_job * combined_mult
+        base_monthly       = base_per_job * jobs_per_month
+        region_monthly     = base_per_job * region_mult * jobs_per_month
+        guaranteed_monthly = base_per_job * region_mult * 3.0 * jobs_per_month  # always the ceiling
+        prod_monthly       = prod_per_job * jobs_per_month  # equals region_monthly or guaranteed_monthly
 
         gpu_prod   = gpu_per_job  * combined_mult
         cpu_prod   = cpu_per_job  * combined_mult
         mem_prod   = mem_per_job  * combined_mult
         total_prod = gpu_prod + cpu_prod + mem_prod
 
-        # ── cost metrics ───────────────────────────────────────────────────────
-        st.markdown(f"#### {gpu_type} — Cost Breakdown")
+        # ── hero cost cards (active config) ───────────────────────────────────
+        st.markdown(f"#### {gpu_type} — Active Cost Estimate")
         c1, c2, c3 = st.columns(3)
         with c1:
-            st.metric("Cost per Job", fmt(base_per_job), help="Base US preemptible rate")
+            st.markdown(card("Cost per Job", fmt(prod_per_job), "green"), unsafe_allow_html=True)
         with c2:
-            st.metric("Daily Cost", fmt(base_per_job * jobs_per_day))
+            st.markdown(card("Daily Cost", fmt(prod_per_job * jobs_per_day), "green"), unsafe_allow_html=True)
         with c3:
-            st.metric("Monthly Cost", f"${base_monthly:,.0f}")
+            st.markdown(card("Monthly Cost", f"${prod_monthly:,.0f}", "green"), unsafe_allow_html=True)
 
         if combined_mult > 1.0:
             parts = []
@@ -271,15 +273,18 @@ with tab1:
             delta = prod_monthly - base_monthly
             st.markdown(f"""
 <div class="m-alert">
-  <strong style="color:{RED};">Pricing adjustments active: {mult_str} = {combined_mult:.2f}× total.</strong><br>
-  Your adjusted monthly cost is <strong style="color:{RED};">${prod_monthly:,.0f}</strong> —
-  that's <strong>${delta:,.0f} more</strong> than the base US rate. This compounding is
-  the number customers most often get surprised by.
+  <strong>Adjustments active: {mult_str} = {combined_mult:.2f}× total.</strong><br>
+  Active monthly cost: <strong style="color:{AMBER};">${prod_monthly:,.0f}</strong> —
+  that's <strong style="color:{AMBER};">${delta:,.0f} more</strong> than the US preemptible base.
+  This compounding is the number customers most often get surprised by.
 </div>
 """, unsafe_allow_html=True)
 
-        # ── naive vs production cards ──────────────────────────────────────────
+        # ── production reality cards ───────────────────────────────────────────
+        st.markdown("")
         st.markdown("#### Base Rate vs Production Reality")
+
+        # Card 3 always shows the guaranteed ceiling (region × 3×), dimmed when inactive.
         p1, p2, p3 = st.columns(3)
         with p1:
             st.markdown(card(
@@ -294,18 +299,28 @@ with tab1:
                 f"+ Region ({region_mult:.2f}×)",
                 f"${region_monthly:,.0f}/mo",
                 region_color,
-                "no change" if region_mult == 1 else f"+{region_mult:.2f}× vs base",
+                "no change" if region_mult == 1 else f"{region_mult:.2f}× vs base",
             ), unsafe_allow_html=True)
         with p3:
-            final_color = "red" if combined_mult > 1 else "green"
-            st.markdown(card(
-                f"+ Guaranteed ({combined_mult:.2f}× total)",
-                f"${prod_monthly:,.0f}/mo",
-                final_color,
-                "no multipliers active" if combined_mult == 1 else f"×{ratio:.1f} vs base",
-            ), unsafe_allow_html=True)
+            g_ratio = guaranteed_monthly / base_monthly if base_monthly > 0 else 1.0
+            if non_preempt:
+                st.markdown(card(
+                    f"+ Guaranteed ({region_mult:.2f}× · 3×)",
+                    f"${guaranteed_monthly:,.0f}/mo",
+                    "red",
+                    f"×{g_ratio:.1f} vs base · active",
+                ), unsafe_allow_html=True)
+            else:
+                st.markdown(card(
+                    "+ Guaranteed (if enabled)",
+                    f"${guaranteed_monthly:,.0f}/mo",
+                    "red",
+                    "toggle on to activate",
+                    dimmed=True,
+                ), unsafe_allow_html=True)
 
         # ── component breakdown chart ──────────────────────────────────────────
+        st.markdown("")
         st.markdown("#### Where the Money Goes (per job)")
         if total_prod > 0:
             gpu_pct = gpu_prod / total_prod * 100
@@ -316,18 +331,22 @@ with tab1:
                 x=[gpu_pct, cpu_pct, mem_pct],
                 y=["GPU", "CPU", "Memory"],
                 orientation="h",
-                marker_color=[GREEN, GREEN_DIM, "#1A6B10"],
+                # GPU = Modal green; CPU/Memory = muted grey so GPU reads as the cost driver
+                marker_color=[GREEN, "#383838", "#2C2C2C"],
                 text=[
-                    f"{gpu_pct:.0f}%  ·  {fmt(gpu_prod)}",
-                    f"{cpu_pct:.0f}%  ·  {fmt(cpu_prod)}",
-                    f"{mem_pct:.0f}%  ·  {fmt(mem_prod)}",
+                    f"  {gpu_pct:.0f}%  ·  {fmt(gpu_prod)}",
+                    f"  {cpu_pct:.0f}%  ·  {fmt(cpu_prod)}",
+                    f"  {mem_pct:.0f}%  ·  {fmt(mem_prod)}",
                 ],
-                textposition="auto",
-                textfont=dict(color="white", size=12),
+                textposition="outside",
+                textfont=dict(color="#bbb", size=11),
+                cliponaxis=False,
                 hovertemplate="%{y}: %{x:.1f}%<extra></extra>",
             ))
-            chart_base(fig_bar, height=175, margin=dict(l=0, r=0, t=4, b=0))
-            fig_bar.update_xaxes(title_text="% of per-job cost", title_font_size=11)
+            chart_base(fig_bar, height=175, margin=dict(l=0, r=10, t=4, b=0))
+            # extend x-axis so outside labels don't clip
+            fig_bar.update_xaxes(range=[0, 130], showticklabels=False, showgrid=False)
+            fig_bar.update_yaxes(tickfont=dict(size=12, color="#aaa"))
             st.plotly_chart(fig_bar, use_container_width=True)
 
         with st.expander("See full GPU rate card"):
