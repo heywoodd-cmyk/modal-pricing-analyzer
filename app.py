@@ -591,7 +591,7 @@ That's where the positioning should concentrate.
 ### 2 · The multiplier-stacking problem: a pricing-transparency issue
 
 A customer can read the headline GPU rate, estimate their volume, arrive at a number that looks
-reasonable — and then find their first real bill is 3×–7× higher because they needed guaranteed
+reasonable — and then find their first real bill is as much as 7× higher because they needed guaranteed
 execution in a non-US region. Neither multiplier is hidden, but they are presented separately
 from the headline rate and the compounding effect isn't made obvious anywhere in the purchase flow.
 
